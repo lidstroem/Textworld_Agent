@@ -262,6 +262,13 @@ class Agent:
         if (state, action) in self.state_action_history:
             return self.state_action_history[(state, action)]
         return 0
+    
+    def reset_history(self):
+        """
+        resets the history; called every time a game episode ends
+        :return:
+        """
+        self.state_action_history = {}
 
     def experience_to_sequences(self, state, action, reward, state_next, actions_next, done):
         # vectorize the text samples into 2D tensors of word indices
@@ -304,7 +311,7 @@ class Agent:
         actions = self.vectorize(actions)
 
         # return an action with maximum Q value
-        return self.q_precomputed_state(state, actions, softmax_selection=True, penalize_history=False)
+        return self.q_precomputed_state(state, actions, softmax_selection=False, penalize_history=True)
         
 
     def train(self, episodes=1, batch_size=256, gamma=0.95,epsilon=1, epsilon_decay=0.99,
@@ -320,6 +327,8 @@ class Agent:
         batch = batch_size - batch_prioritized
 
         for episode in range(episodes):
+            print("Episode: ", episode+1, " Epsilon: ", epsilon)
+
             train_rewards = self.play(episodes=1, store_experience=True, epsilon=epsilon)
             train_rewards_history.append(train_rewards)
 
@@ -356,14 +365,14 @@ class Agent:
                     state, action, reward, state_next, actions_next, finished = self.experience[
                         batches_prioritized[b - batch]]
 
-                _, current_q = self.q_precomputed_state(state, [action], softmax_selection=True, penalize_history=True)
+                _, current_q = self.q_precomputed_state(state, [action], penalize_history=False)
                 alpha = 1
 
                 target = current_q + alpha * (reward - current_q)
 
                 if not finished:
                     # get an action with maximum Q value
-                    _, q_max = self.q_precomputed_state(state_next, actions_next,softmax_selection=True, penalize_history=True)
+                    _, q_max = self.q_precomputed_state(state_next, actions_next, penalize_history=False)
                     target += alpha * gamma * q_max
 
                 states[b] = state
@@ -413,7 +422,6 @@ class Agent:
                 # save the model
                 self.model.save(self.log_folder + '/' + log_prefix + file_name + '.h5')
             
-            print("Episode: ", episode+1, "TrainReward: ", train_rewards, "TestReward: ", test_rewards)
         return
 
 
@@ -430,6 +438,8 @@ class Agent:
             actions = [preprocess(a) for a in infos["admissible_commands"]]
             old_reward = 0
             moves = 0
+            avg_moves, avg_scores = [], []
+            self.reset_history()
 
             while True:
                 action, q_value = self.get_action(state, actions, epsilon)
@@ -449,50 +459,61 @@ class Agent:
                 next_state = preprocess(next_state)
                 actions = [preprocess(a) for a in infos["admissible_commands"]]
 
+                textreward = reward
+
+                #scale reward
+                reward /= infos["max_score"] # (reward/infos["max_score"] * 2) - 1
+
                 if store_experience:
                     experiences.append((last_state,last_action,reward,next_state, actions, done))
 
                 if(reward != old_reward):
                     old_reward = reward
-                    reward += 10
-                    episode_reward += reward    
-                else:
-                    episode_reward -= 1
-                    reward = -1
+                
                 moves += 1
 
+            
                 if store_experience and (moves < self.env._max_episode_steps or initialize_only):
                     for last_state, last_action, reward, state, actions, done in experiences:
                         self.store_experience(last_state, last_action, reward,next_state, actions, done, initialize_only)
 
 
                 state = next_state
+                
+                
+
                 if done and infos["max_score"] == old_reward:
-                    episode_reward += 100
                     print("You won!")
                     break
+                    
                 if done:
                     break
                 
-            
-        return episode_reward
+            avg_moves.append(moves)
+            avg_scores.append(textreward)
+            if(epsilon==0):
+                    msg = "  \tTest: steps: {:5.1f}; score: {:4.1f} / {}."
+            else:
+                msg = "  \tTrain: steps: {:5.1f}; score: {:4.1f} / {}."
+            print(msg.format(np.mean(avg_moves), np.mean(avg_scores), infos["max_score"]))
+        return np.mean(avg_scores)
 
 
 if __name__ == "__main__":
-    path = "EINT/tw_games/"
+    path = "EINT/tw_games/tw-cooking-recipe3+take3+cook+cut+go9-D397IBQkHe9Ws6ka.ulx"
     gameFiles = path
     if os.path.isdir(path):
         gameFiles = glob(os.path.join(path,"*.ulx"))
 
     request_infos = textworld.EnvInfos(admissible_commands=True, max_score=True, verbs=True, command_templates=True, entities=True)
 
-    env_id = textworld.gym.register_games(gameFiles,request_infos=request_infos, max_episode_steps=50)
+    env_id = textworld.gym.register_game(path,request_infos=request_infos, max_episode_steps=50)
 
     env = gym.make(env_id)
 
     agent = Agent(env)
     agent.initialize_tokens("EINT/vocab.txt")
-    agent.create_model(64,128,4,Adam())
-    agent.train(episodes=50)
+    agent.create_model(128,256,10,Adam())
+    agent.train(episodes=256)
     input("Play?")
     agent.play(episodes=1,epsilon=0, render=True)
