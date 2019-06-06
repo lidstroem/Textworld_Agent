@@ -9,8 +9,6 @@ from keras.models import *
 from keras.layers import *
 from keras.optimizers import *
 
-from dqn import *
-
 import datetime
 import math
 import nltk
@@ -99,6 +97,8 @@ class Agent:
         
         self.log_folder = "logs"
         os.makedirs(self.log_folder, exist_ok=True)
+
+        self.direction_commands = ["go east", "go west", "go north", "go south"]
         #self.cv = CountVectorizer(token_pattern="(.*)")
         #self.cv.fit(env.observation_space.vocab)
         #self.features = self.cv.get_feature_names()
@@ -315,7 +315,7 @@ class Agent:
         
 
     def train(self, episodes=1, batch_size=256, gamma=0.95,epsilon=1, epsilon_decay=0.99,
-              prioritized_fraction=0, test_interval=1,test_steps=1,checkpoint_steps=128, log_prefix='model'):
+              prioritized_fraction=0.25, test_interval=1,test_steps=1,checkpoint_steps=128, log_prefix='model'):
 
         train_rewards_history = []
         test_rewards_history = []
@@ -391,7 +391,7 @@ class Agent:
 
             # add a tensorboard callback on the last episode
             #if i + 1 == episodes:
-            #    callbacks = [self.tensorboard]
+            #       callbacks = [self.tensorboard]
 
             self.model.fit(x=[states, actions], y=targets, batch_size=batch_size, epochs=1, verbose=0,
                            callbacks=callbacks)
@@ -399,28 +399,28 @@ class Agent:
             epsilon *= epsilon_decay
 
             # every checkpoint_steps, write down train and test reward history and the model object
-            if ((episode + 1) % checkpoint_steps) == 0:
+            #if ((episode + 1) % checkpoint_steps) == 0:
 
-                file_name = 'ep' + str(episode) + '_' + datetime.datetime.now().strftime('%m-%d-%H_%M_%S')
+                #file_name = 'ep' + str(episode) + '_' + datetime.datetime.now().strftime('%m-%d-%H_%M_%S')
 
-                with open(self.log_folder + '/' + log_prefix + '_train_' + file_name + '.txt', 'w') as file:
-                    for simulator_rewards in train_rewards_history:
-                        for rewards in simulator_rewards:
-                            for reward in rewards:
-                                file.write('{:.1f}'.format(reward) + ' ')
-                            file.write(',')
-                        file.write('\n')
+                #with open(self.log_folder + '/' + log_prefix + '_train_' + file_name + '.txt', 'w') as file:
+                    #for simulator_rewards in train_rewards_history:
+                        #for rewards in simulator_rewards:
+                            #for reward in rewards:
+                             #   file.write('{:.1f}'.format(reward) + ' ')
+                            #file.write(',')
+                        #file.write('\n')
 
-                with open(self.log_folder + '/' + log_prefix + '_test_' + file_name + '.txt', 'w') as file:
-                    for simulator_rewards in test_rewards_history:
-                        for rewards in simulator_rewards:
-                            for reward in rewards:
-                                file.write('{:.1f}'.format(reward) + ' ')
-                            file.write(',')
-                        file.write('\n')
+                #with open(self.log_folder + '/' + log_prefix + '_test_' + file_name + '.txt', 'w') as file:
+                #    for simulator_rewards in test_rewards_history:
+                #        for rewards in simulator_rewards:
+                #            for reward in rewards:
+                #                file.write('{:.1f}'.format(reward) + ' ')
+                #            file.write(',')
+                #        file.write('\n')
 
                 # save the model
-                self.model.save(self.log_folder + '/' + log_prefix + file_name + '.h5')
+                #self.model.save(self.log_folder + '/' + log_prefix + file_name + '.h5')
             
         return
 
@@ -453,6 +453,8 @@ class Agent:
                 last_state = state
                 last_action = actions[action]
 
+                if(epsilon == 0):
+                    print(actions[action])
 
                 next_state, reward, done, infos = self.env.step(actions[action])
 
@@ -461,16 +463,32 @@ class Agent:
 
                 textreward = reward
 
+                if(reward != old_reward):
+                    old_reward = reward
+                    reward = infos["max_score"]
+                else:
+                    if last_action not in self.direction_commands:
+                        reward = -(infos["max_score"])   
+                    else:
+                        reward = 0
+
+                moves += 1
+
+                if done and infos["max_score"] == old_reward:
+                    print("You won!")
+                    break
+                    
+                if done:
+                    reward = -(infos["max_score"])
+                    break
+
                 #scale reward
                 reward /= infos["max_score"] # (reward/infos["max_score"] * 2) - 1
 
                 if store_experience:
                     experiences.append((last_state,last_action,reward,next_state, actions, done))
-
-                if(reward != old_reward):
-                    old_reward = reward
                 
-                moves += 1
+                
 
             
                 if store_experience and (moves < self.env._max_episode_steps or initialize_only):
@@ -480,14 +498,6 @@ class Agent:
 
                 state = next_state
                 
-                
-
-                if done and infos["max_score"] == old_reward:
-                    print("You won!")
-                    break
-                    
-                if done:
-                    break
                 
             avg_moves.append(moves)
             avg_scores.append(textreward)
@@ -500,7 +510,8 @@ class Agent:
 
 
 if __name__ == "__main__":
-    path = "EINT/tw_games/tw-cooking-recipe3+take3+cook+cut+go9-D397IBQkHe9Ws6ka.ulx"
+    path = "EINT/tw_games/tw-cooking-recipe1+take1-11Oeig8bSVdGSp78.ulx" #einfachstes Spiel  relativ sicher nach 40 Episoden
+    #path = "EINT/tw_games/tw-cooking-recipe3+take3+cook+cut+go9-D397IBQkHe9Ws6ka.ulx" #schwerstes Spiel - ergebnis noch offen
     gameFiles = path
     if os.path.isdir(path):
         gameFiles = glob(os.path.join(path,"*.ulx"))
@@ -513,7 +524,7 @@ if __name__ == "__main__":
 
     agent = Agent(env)
     agent.initialize_tokens("EINT/vocab.txt")
-    agent.create_model(128,256,10,Adam())
-    agent.train(episodes=256)
+    agent.create_model(16,32,8,RMSprop(lr=0.001))
+    agent.train(episodes=256, test_interval=5)
     input("Play?")
     agent.play(episodes=1,epsilon=0, render=True)
